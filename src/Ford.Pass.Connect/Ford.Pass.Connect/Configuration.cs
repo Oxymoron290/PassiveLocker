@@ -7,6 +7,7 @@ namespace Ford.Pass.Connect
         public string IDPEndpoint { get; private set; }
         public string BaseEndpoint { get; private set; }
         public string ClientId { get; private set; }
+        public string ApplicationId { get; private set; }
         public string VehicleIdentificationNumber { get; private set; }
         public string Username { get; private set; }
         public string Password { get; private set; }
@@ -16,6 +17,7 @@ namespace Ford.Pass.Connect
             IDPEndpoint = config["FordPass:idpEndpoint"];
             BaseEndpoint = config["FordPass:baseEndpoint"];
             ClientId = config["FordPass:clientId"];
+            ApplicationId = config["FordPass:applicationId"];
             VehicleIdentificationNumber = config["FordPass:vin"];
             Username = config["FordPass:username"];
             Password = config["FordPass:password"];

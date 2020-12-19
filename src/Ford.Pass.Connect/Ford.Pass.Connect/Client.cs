@@ -1,9 +1,12 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using Ford.Pass.Connect.Models;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Threading.Tasks;
 
 namespace Ford.Pass.Connect
 {
@@ -14,6 +17,8 @@ namespace Ford.Pass.Connect
         private readonly HttpClient client;
         private readonly ILogger<Client> logger;
 
+        private TokenResponseModel token;
+
         public Client(IConfiguration configuration, ILogger<Client> logger)
         {
             this.logger = logger;
@@ -21,12 +26,8 @@ namespace Ford.Pass.Connect
             baseEndpoint = new Uri(config.BaseEndpoint);
             client = new HttpClient();
             client.DefaultRequestHeaders.Accept.Clear();
-            //client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            client.DefaultRequestHeaders.Add("Accept", "*/*");
-            client.DefaultRequestHeaders.Add("Accept-Language", "en-us");
-            //client.DefaultRequestHeaders.Add("Content-Type", "application/json");
+            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             client.DefaultRequestHeaders.Add("User-Agent", "fordpass-na/353 CFNetwork/1121.2.2 Darwin/19.3.0");
-            client.DefaultRequestHeaders.Add("Accept-Encoding", "gzip, deflate, br");
         }
 
         public void Dispose()
@@ -34,23 +35,120 @@ namespace Ford.Pass.Connect
             client.Dispose();
         }
 
-        public async void Auth()
+        public async Task<TokenResponseModel> Auth()
         {
-            var endpoint = new Uri(baseEndpoint, "v1.0/endpoint/default/token");
-            client.DefaultRequestHeaders.Add("Content-Type", "application/x-www-form-urlencoded");
-            var data = new List<KeyValuePair<string, string>>
+            var endpoint = new Uri(new Uri(config.IDPEndpoint), "v1.0/endpoint/default/token");
+            logger.LogDebug($"Call to {endpoint}");
+            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/x-www-form-urlencoded"));
+            var data = new Dictionary<string, string>
             {
-                new KeyValuePair<string, string>("client_id", config.ClientId),
-                new KeyValuePair<string, string>("grant_type", "password"),
-                new KeyValuePair<string, string>("username", config.Username),
-                new KeyValuePair<string, string>("password", config.Password)
+                { "client_id", config.ClientId },
+                { "grant_type", "password" },
+                { "username", config.Username },
+                { "password", config.Password }
             };
 
-            using (var response = await client.PostAsync(endpoint, new FormUrlEncodedContent(data)))
+            TokenResponseModel result = null;
+            try
             {
-                var result = await response.Content.ReadAsStringAsync();
-                logger.LogDebug(result);
+                var body = new FormUrlEncodedContent(data);
+                using (var response = await client.PostAsync(endpoint, body))
+                {
+                    var responseBody = await response.Content.ReadAsStringAsync();
+                    result = JsonConvert.DeserializeObject<TokenResponseModel>(responseBody);
+                }
+                this.token = result;
+                client.DefaultRequestHeaders.Add("auth-token", result.AccessToken);
+                client.DefaultRequestHeaders.Add("Application-Id", config.ApplicationId);
             }
+            catch(Exception ex)
+            {
+                logger.LogError(ex, ex.Message);
+            }
+
+            return result;
+        }
+
+        public async Task<VehicleStatusResponse> GetStatus()
+        {
+            // todo: check if token is still valid
+            var endpoint = new Uri(baseEndpoint, $"/api/vehicles/v4/{config.VehicleIdentificationNumber}/status");
+            logger.LogDebug($"Call to {endpoint}");
+            VehicleStatusResponse result = null;
+            using (var response = await client.GetAsync(endpoint))
+            {
+                var responseBody = await response.Content.ReadAsStringAsync();
+                result = JsonConvert.DeserializeObject<VehicleStatusResponse>(responseBody);
+            }
+
+            return result;
+        }
+
+        public async Task<CommandResponse> IssueCommand(FordCommand command)
+        {
+            Task<HttpResponseMessage> operation;
+            Uri endpoint;
+            switch (command)
+            {
+                case FordCommand.Start:
+                    endpoint = new Uri(baseEndpoint, $"api/vehicles/v2/{config.VehicleIdentificationNumber}/engine/start");
+                    operation = client.PutAsync(endpoint, null);
+                    break;
+                case FordCommand.Stop:
+                    endpoint = new Uri(baseEndpoint, $"api/vehicles/v2/{config.VehicleIdentificationNumber}/engine/start");
+                    operation = client.DeleteAsync(endpoint);
+                    break;
+                case FordCommand.Lock:
+                    endpoint = new Uri(baseEndpoint, $"api/vehicles/v2/{config.VehicleIdentificationNumber}/doors/lock");
+                    operation = client.PutAsync(endpoint, null);
+                    break;
+                case FordCommand.Unlock:
+                    endpoint = new Uri(baseEndpoint, $"api/vehicles/v2/{config.VehicleIdentificationNumber}/doors/lock");
+                    operation = client.DeleteAsync(endpoint);
+                    break;
+                default:
+                    throw new Exception("Invalid Ford Command");
+            }
+
+            logger.LogDebug($"Call to {endpoint}");
+
+            CommandResponse result = null;
+            using (var response = await operation)
+            {
+                var responseBody = await response.Content.ReadAsStringAsync();
+                result = JsonConvert.DeserializeObject<CommandResponse>(responseBody);
+            }
+
+            return result;
+        }
+
+        public async Task<CommandStatus> CommandStatus(FordCommand command, CommandResponse commandId)
+        {
+
+            Uri endpoint;
+            switch (command)
+            {
+                case FordCommand.Start:
+                case FordCommand.Stop:
+                    endpoint = new Uri(baseEndpoint, $"api/vehicles/v2/{config.VehicleIdentificationNumber}/engine/start/{commandId.CommandId}");
+                    break;
+                case FordCommand.Lock:
+                case FordCommand.Unlock:
+                    endpoint = new Uri(baseEndpoint, $"api/vehicles/v2/{config.VehicleIdentificationNumber}/doors/lock/{commandId.CommandId}");
+                    break;
+                default:
+                    throw new Exception("Invalid Ford Command");
+            }
+
+            logger.LogDebug($"Call to {endpoint}");
+            CommandStatus result = null;
+            using (var response = await client.GetAsync(endpoint))
+            {
+                var responseBody = await response.Content.ReadAsStringAsync();
+                result = JsonConvert.DeserializeObject<CommandStatus>(responseBody);
+            }
+
+            return result;
         }
     }
 }
