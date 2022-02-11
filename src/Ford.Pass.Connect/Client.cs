@@ -5,6 +5,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
+//using System.Net.Http.Json;
 using System.Net.Http.Headers;
 using System.Threading.Tasks;
 
@@ -16,8 +17,8 @@ namespace Ford.Pass.Connect
         private readonly Uri baseEndpoint;
         private readonly HttpClient client;
         private readonly ILogger<Client> logger;
-
         private TokenResponseModel token;
+        private bool _authenticated;
 
         public Client(IConfiguration configuration, ILogger<Client> logger)
         {
@@ -30,6 +31,21 @@ namespace Ford.Pass.Connect
             client.DefaultRequestHeaders.Add("User-Agent", "fordpass-na/353 CFNetwork/1121.2.2 Darwin/19.3.0");
         }
 
+        private void SetIAMHeaders()
+        {
+            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/x-www-form-urlencoded"));
+        }
+
+        private void SetFordHeaders(string accessToken = null)
+        {
+            client.DefaultRequestHeaders.Accept.Clear();
+            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            client.DefaultRequestHeaders.Add("Application-Id", config.ApplicationId);
+            if (accessToken == null) accessToken = token?.AccessToken;
+            if (accessToken == null) return;
+            client.DefaultRequestHeaders.Add("auth-token", accessToken);
+        }
+
         public void Dispose()
         {
             client.Dispose();
@@ -37,9 +53,9 @@ namespace Ford.Pass.Connect
 
         public async Task<TokenResponseModel> Auth()
         {
-            var endpoint = new Uri(new Uri(config.IDPEndpoint), "v1.0/endpoint/default/token");
+            var endpoint = new Uri(new Uri(config.AuthEndpoint), "v1.0/endpoint/default/token");
             logger.LogDebug($"Call to {endpoint}");
-            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/x-www-form-urlencoded"));
+            SetIAMHeaders();
             var data = new Dictionary<string, string>
             {
                 { "client_id", config.ClientId },
@@ -57,9 +73,7 @@ namespace Ford.Pass.Connect
                     var responseBody = await response.Content.ReadAsStringAsync();
                     result = JsonConvert.DeserializeObject<TokenResponseModel>(responseBody);
                 }
-                this.token = result;
-                client.DefaultRequestHeaders.Add("auth-token", result.AccessToken);
-                client.DefaultRequestHeaders.Add("Application-Id", config.ApplicationId);
+                await GetToken(result);
             }
             catch(Exception ex)
             {
@@ -69,9 +83,49 @@ namespace Ford.Pass.Connect
             return result;
         }
 
+        private async Task<TokenResponseModel> GetToken(TokenResponseModel auth)
+        {
+            var endpoint = new Uri(new Uri(config.TokenEndpoint), "/api/oauth2/v1/token");
+            logger.LogDebug($"Call to {endpoint}");
+            SetFordHeaders();
+            var data = new Dictionary<string, string>
+            {
+                { "code", auth.AccessToken }
+            };
+            
+            TokenResponseModel result = null;
+            try
+            {
+                var body = new StringContent(JsonConvert.SerializeObject(data));
+                //var b = new JsonContent()
+                using(var response = await client.PutAsync(endpoint, body))
+                {
+                    this._authenticated = response.IsSuccessStatusCode;
+                    var responseBody = await response.Content.ReadAsStringAsync();
+                    result = JsonConvert.DeserializeObject<TokenResponseModel>(responseBody);
+                }
+                token = result;
+                SetFordHeaders(result.AccessToken);
+            }
+            catch(Exception ex)
+            {
+                logger.LogError(ex, ex.Message);
+            }
+
+            return result;
+        }
+
+        private bool CheckAuth()
+        {
+            if (!_authenticated) return false;
+            // todo: check if token is still valid and expiration
+
+            return true;
+        }
+
         public async Task<VehicleStatusResponse> GetStatus()
         {
-            // todo: check if token is still valid
+            if(!CheckAuth()) return null;
             var endpoint = new Uri(baseEndpoint, $"/api/vehicles/v4/{config.VehicleIdentificationNumber}/status");
             logger.LogDebug($"Call to {endpoint}");
             VehicleStatusResponse result = null;
@@ -86,6 +140,7 @@ namespace Ford.Pass.Connect
 
         public async Task<CommandResponse> IssueCommand(FordCommand command)
         {
+            if(!CheckAuth()) return null;
             Task<HttpResponseMessage> operation;
             Uri endpoint;
             switch (command)
@@ -124,7 +179,7 @@ namespace Ford.Pass.Connect
 
         public async Task<CommandStatus> CommandStatus(FordCommand command, CommandResponse commandId)
         {
-
+            if(!CheckAuth()) return null;
             Uri endpoint;
             switch (command)
             {

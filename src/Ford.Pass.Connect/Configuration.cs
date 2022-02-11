@@ -4,7 +4,8 @@ namespace Ford.Pass.Connect
 {
     public class Configuration
     {
-        public string IDPEndpoint { get; private set; }
+        public string AuthEndpoint { get; private set; }
+        public string TokenEndpoint { get; private set; }
         public string BaseEndpoint { get; private set; }
         public string ClientId { get; private set; }
         public string ApplicationId { get; private set; }
@@ -14,7 +15,8 @@ namespace Ford.Pass.Connect
 
         public Configuration(IConfiguration config)
         {
-            IDPEndpoint = config["FordPass:idpEndpoint"];
+            AuthEndpoint = config["FordPass:authEndpoint"];
+            TokenEndpoint = config["FordPass:tokenEndpoint"];
             BaseEndpoint = config["FordPass:baseEndpoint"];
             ClientId = config["FordPass:clientId"];
             ApplicationId = config["FordPass:applicationId"];
